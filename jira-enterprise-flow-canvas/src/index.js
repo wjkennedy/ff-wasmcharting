@@ -1,0 +1,316 @@
+import Resolver from '@forge/resolver';
+import api, { route, storage } from '@forge/api';
+import {
+  buildDistributionAggregate,
+  buildFlowAggregate,
+  hashKey,
+  pickStatusGroup
+} from './lib/aggregates.js';
+
+const resolver = new Resolver();
+
+const CONFIG_KEY = 'efc:config';
+const SAVED_VIEW_PREFIX = 'efc:view:';
+const PERF_PREFIX = 'efc:perf:';
+const CACHE_PREFIX = 'efc:cache:';
+
+const DEFAULT_CONFIG = {
+  adminAccountIds: [],
+  fieldMapping: {
+    team: '',
+    points: '',
+    statusCategoryFallback: true
+  },
+  statusGroups: {
+    backlog: ['To Do'],
+    inProgress: ['In Progress'],
+    done: ['Done']
+  },
+  cacheTtlSeconds: 900,
+  maxIssuesPerQuery: 2000
+};
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, Number(value) || min));
+}
+
+async function getConfig() {
+  const cfg = await storage.get(CONFIG_KEY);
+  return { ...DEFAULT_CONFIG, ...(cfg || {}) };
+}
+
+async function setConfig(config) {
+  await storage.set(CONFIG_KEY, config);
+  return config;
+}
+
+function isAdmin(context, config) {
+  const accountId = context?.accountId || '';
+  const admins = config?.adminAccountIds || [];
+  if (admins.length === 0) {
+    return true;
+  }
+  return admins.includes(accountId);
+}
+
+function requireAdmin(context, config) {
+  if (!isAdmin(context, config)) {
+    throw new Error('Admin permission required');
+  }
+}
+
+function buildCacheKey(accountId, payload, config) {
+  const raw = JSON.stringify({
+    accountId,
+    jql: payload?.jql || '',
+    timeWindow: payload?.timeWindow || 'P90D',
+    viewType: payload?.viewType || 'flow',
+    fieldMapping: config?.fieldMapping || {},
+    statusGroups: config?.statusGroups || {}
+  });
+  return `${CACHE_PREFIX}${hashKey(raw)}`;
+}
+
+async function readCache(cacheKey) {
+  const record = await storage.get(cacheKey);
+  if (!record?.expiresAt || Date.now() > record.expiresAt) {
+    return null;
+  }
+  return record.data;
+}
+
+async function writeCache(cacheKey, data, ttlSeconds) {
+  await storage.set(cacheKey, {
+    data,
+    expiresAt: Date.now() + (clamp(ttlSeconds, 60, 3600) * 1000),
+    cachedAt: nowIso()
+  });
+}
+
+async function fetchIssuesAsUser(jql, maxIssues) {
+  const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jql,
+      maxResults: maxIssues,
+      startAt: 0,
+      fields: ['summary', 'status', 'priority', 'created', 'updated', 'issuetype']
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Jira search failed (${response.status}): ${errorBody}`);
+  }
+
+  const payload = await response.json();
+  return payload?.issues || [];
+}
+
+async function recordPerf(context, payload) {
+  const accountId = context?.accountId || 'unknown';
+  await storage.set(`${PERF_PREFIX}${accountId}`, {
+    ...payload,
+    ts: nowIso()
+  });
+}
+
+resolver.define('getBootstrap', async ({ context }) => {
+  const config = await getConfig();
+  return {
+    viewer: {
+      accountId: context?.accountId || '',
+      cloudId: context?.cloudId || '',
+      isAdmin: isAdmin(context, config)
+    },
+    config: {
+      fieldMapping: config.fieldMapping,
+      statusGroups: config.statusGroups,
+      cacheTtlSeconds: config.cacheTtlSeconds
+    },
+    constraints: {
+      forgeOnly: true,
+      dataEgress: false
+    }
+  };
+});
+
+resolver.define('queryAggregate', async ({ context, payload }) => {
+  const startedAt = Date.now();
+  const config = await getConfig();
+  const jql = (payload?.jql || '').trim();
+  if (!jql) {
+    throw new Error('JQL is required');
+  }
+
+  const maxIssues = clamp(payload?.maxIssues || config.maxIssuesPerQuery, 100, 5000);
+  const cacheKey = buildCacheKey(context?.accountId || '', payload, config);
+  const cached = await readCache(cacheKey);
+  if (cached) {
+    await recordPerf(context, {
+      op: 'queryAggregate',
+      cacheHit: true,
+      elapsedMs: Date.now() - startedAt
+    });
+    return {
+      ...cached,
+      meta: {
+        ...cached.meta,
+        cacheHit: true
+      }
+    };
+  }
+
+  const issues = await fetchIssuesAsUser(jql, maxIssues);
+  const viewType = payload?.viewType === 'distribution' ? 'distribution' : 'flow';
+  const aggregate = viewType === 'distribution'
+    ? buildDistributionAggregate(issues, config.fieldMapping.team)
+    : buildFlowAggregate(issues, config.statusGroups);
+
+  const result = {
+    aggregate,
+    sampleIssues: issues.slice(0, 200).map((issue) => ({
+      key: issue.key,
+      summary: issue?.fields?.summary || '',
+      status: issue?.fields?.status?.name || '',
+      priority: issue?.fields?.priority?.name || ''
+    })),
+    meta: {
+      sourceCount: issues.length,
+      generatedAt: nowIso(),
+      cacheHit: false
+    }
+  };
+
+  await writeCache(cacheKey, result, config.cacheTtlSeconds);
+  await recordPerf(context, {
+    op: 'queryAggregate',
+    cacheHit: false,
+    elapsedMs: Date.now() - startedAt,
+    issueCount: issues.length
+  });
+  return result;
+});
+
+resolver.define('listIssues', async ({ payload }) => {
+  const jql = (payload?.jql || '').trim();
+  if (!jql) {
+    throw new Error('JQL is required');
+  }
+  const maxIssues = clamp(payload?.maxIssues || 200, 1, 1000);
+  const issues = await fetchIssuesAsUser(jql, maxIssues);
+  return issues.map((issue) => ({
+    key: issue.key,
+    summary: issue?.fields?.summary || '',
+    status: issue?.fields?.status?.name || '',
+    priority: issue?.fields?.priority?.name || '',
+    updated: issue?.fields?.updated || ''
+  }));
+});
+
+resolver.define('exportIssuesCsv', async ({ payload }) => {
+  const jql = (payload?.jql || '').trim();
+  if (!jql) {
+    throw new Error('JQL is required');
+  }
+  const issues = await fetchIssuesAsUser(jql, clamp(payload?.maxIssues || 500, 1, 1000));
+  const header = ['Key', 'Summary', 'Status', 'Priority', 'Updated'];
+  const rows = issues.map((issue) => [
+    issue.key,
+    (issue?.fields?.summary || '').replaceAll('"', '""'),
+    issue?.fields?.status?.name || '',
+    issue?.fields?.priority?.name || '',
+    issue?.fields?.updated || ''
+  ]);
+  const csv = [header, ...rows]
+    .map((cols) => cols.map((c) => `"${String(c)}"`).join(','))
+    .join('\n');
+  return {
+    fileName: 'flow-canvas-export.csv',
+    content: csv
+  };
+});
+
+resolver.define('saveView', async ({ context, payload }) => {
+  const name = (payload?.name || '').trim();
+  if (!name) {
+    throw new Error('View name is required');
+  }
+  const accountId = context?.accountId || '';
+  const record = {
+    name,
+    jql: payload?.jql || '',
+    timeWindow: payload?.timeWindow || 'P90D',
+    viewType: payload?.viewType || 'flow',
+    updatedAt: nowIso()
+  };
+  await storage.set(`${SAVED_VIEW_PREFIX}${accountId}:${name}`, record);
+  return record;
+});
+
+resolver.define('listViews', async ({ context }) => {
+  const accountId = context?.accountId || '';
+  const query = await storage.query()
+    .where('key', storage.startsWith(`${SAVED_VIEW_PREFIX}${accountId}:`))
+    .limit(50)
+    .getMany();
+  return (query?.results || []).map((item) => item.value);
+});
+
+resolver.define('deleteView', async ({ context, payload }) => {
+  const accountId = context?.accountId || '';
+  const name = (payload?.name || '').trim();
+  if (!name) {
+    throw new Error('View name is required');
+  }
+  await storage.delete(`${SAVED_VIEW_PREFIX}${accountId}:${name}`);
+  return { deleted: true };
+});
+
+resolver.define('getPerfSnapshot', async ({ context }) => {
+  const accountId = context?.accountId || 'unknown';
+  return (await storage.get(`${PERF_PREFIX}${accountId}`)) || null;
+});
+
+resolver.define('getAdminConfig', async ({ context }) => {
+  const config = await getConfig();
+  return {
+    ...config,
+    isAdmin: isAdmin(context, config)
+  };
+});
+
+resolver.define('saveAdminConfig', async ({ context, payload }) => {
+  const current = await getConfig();
+  requireAdmin(context, current);
+  const next = {
+    ...current,
+    fieldMapping: {
+      ...current.fieldMapping,
+      ...(payload?.fieldMapping || {})
+    },
+    statusGroups: {
+      ...current.statusGroups,
+      ...(payload?.statusGroups || {})
+    },
+    cacheTtlSeconds: clamp(payload?.cacheTtlSeconds || current.cacheTtlSeconds, 60, 3600),
+    maxIssuesPerQuery: clamp(payload?.maxIssuesPerQuery || current.maxIssuesPerQuery, 100, 5000),
+    adminAccountIds: Array.isArray(payload?.adminAccountIds) ? payload.adminAccountIds : current.adminAccountIds
+  };
+  await setConfig(next);
+  return next;
+});
+
+export const handler = resolver.getDefinitions();
+
+export const __private = {
+  buildFlowAggregate,
+  buildDistributionAggregate,
+  pickStatusGroup,
+  hashKey
+};

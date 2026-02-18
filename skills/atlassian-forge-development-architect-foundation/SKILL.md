@@ -34,7 +34,7 @@ Build Forge apps for correctness, maintainability, and deployability. Optimize f
 
 ## Mandatory Forge Constraints
 
-- Set runtime to Node 22 in every manifest:
+- Set runtime to the latest supported NodeJS version in every manifest:
 
 ```yaml
 app:
