@@ -1,0 +1,306 @@
+app:
+  id: ari:cloud:ecosystem::app/1e75e74f-c7af-44a6-b9dc-47d6bb5f8f9b
+  runtime:
+    name: nodejs22.x
+
+modules:
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: jql-function
+      handler: index.jqlFunction
+    - key: workflow-post-function
+      handler: index.workflowPostFunction
+
+  jira:globalPage:
+    - key: primitives-demo-home
+      title: Forge Primitives Demo
+      resource: main
+      route: /
+      resolver:
+        function: resolver
+      render: native
+
+  jira:adminPage:
+    - key: primitives-demo-admin
+      title: Forge Primitives Demo — Admin
+      resource: admin
+      route: /admin
+      resolver:
+        function: resolver
+      render: native
+      useAsConfig: true
+
+  jira:projectPage:
+    - key: primitives-project-page
+      title: Forge Primitives — Project Page
+      resource: module
+      route: /project
+      resolver:
+        function: resolver
+      render: native
+
+  jira:projectSettingsPage:
+    - key: primitives-project-settings
+      title: Forge Primitives — Project Settings
+      resource: module
+      route: /project-settings
+      resolver:
+        function: resolver
+      render: native
+
+  jira:personalSettingsPage:
+    - key: primitives-personal-settings
+      title: Forge Primitives — Personal Settings
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:fullPage:
+    - key: primitives-full-page
+      title: Forge Primitives — Full Page
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+      routePrefix: forge-primitives
+
+  jira:issuePanel:
+    - key: primitives-issue-panel
+      title: Forge Primitives — Issue Panel
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel.svg
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueContext:
+    - key: primitives-issue-context
+      title: Forge Primitives — Issue Context
+      label: Forge Primitives
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueGlance:
+    - key: primitives-issue-glance
+      title: Forge Primitives — Issue Glance
+      label: Forge Primitives
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-glance.svg
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueActivity:
+    - key: primitives-issue-activity
+      title: Forge Primitives — Issue Activity
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueAction:
+    - key: primitives-issue-action
+      title: Forge Primitives — Issue Action
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueNavigatorAction:
+    - key: primitives-issue-navigator-action
+      title: Forge Primitives — Issue Navigator Action
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:boardAction:
+    - key: primitives-board-action
+      title: Forge Primitives — Board Action
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:backlogAction:
+    - key: primitives-backlog-action
+      title: Forge Primitives — Backlog Action
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:sprintAction:
+    - key: primitives-sprint-action
+      title: Forge Primitives — Sprint Action
+      resource: module
+      resolver:
+        function: resolver
+      render: native
+
+  jira:command:
+    - key: primitives-command
+      title: Forge Primitives Command
+      shortcut: MOD+SHIFT+P
+      target:
+        resource: command-modal
+        resolver:
+          function: resolver
+        render: native
+
+  jira:dashboardGadget:
+    - key: primitives-dashboard-gadget
+      title: Forge Primitives Gadget
+      description: Minimal dashboard gadget reference implementation.
+      thumbnail: https://developer.atlassian.com/platform/forge/images/icons/issue-panel.svg
+      resource: dashboard-gadget-view
+      resolver:
+        function: resolver
+      render: native
+
+  jira:dashboardBackgroundScript:
+    - key: primitives-dashboard-background
+      resource: dashboard-background
+      resolver:
+        function: resolver
+      render: native
+
+  jira:issueViewBackgroundScript:
+    - key: primitives-issue-background
+      resource: issue-background
+      resolver:
+        function: resolver
+      render: native
+
+  jira:customField:
+    - key: primitives-custom-field
+      name: Forge Primitives Custom Field
+      description: Minimal custom field reference implementation.
+      type: string
+      view:
+        resource: custom-field-view
+        render: native
+      edit:
+        resource: custom-field-edit
+        render: native
+        isInline: true
+        experience:
+          - issue-view
+          - issue-create
+          - issue-transition
+
+  jira:customFieldType:
+    - key: primitives-custom-field-type
+      name: Forge Primitives Field Type
+      description: Minimal custom field type reference implementation.
+      type: string
+      searcher: text
+      view:
+        resource: custom-field-view
+        render: native
+      edit:
+        resource: custom-field-edit
+        render: native
+        isInline: true
+
+  jira:entityProperty:
+    - key: primitives-entity-property
+      name: Forge Primitives Entity Property
+      entityType: issue
+      propertyKey: forgePrimitives
+      values:
+        - key: summaryText
+          type: string
+          path: $.summary
+
+  jira:globalPermission:
+    - key: primitives-global-permission
+      name: Forge Primitives Global Permission
+      description: Grants access to Forge Primitives demo capabilities.
+      anonymousAllowed: false
+
+  jira:projectPermission:
+    - key: primitives-project-permission
+      name: Forge Primitives Project Permission
+      description: Grants project-level access to Forge Primitives demo capabilities.
+
+  jira:timeTrackingProvider:
+    - key: primitives-time-tracking
+      name: Forge Primitives Time Tracking
+      adminPage: primitives-demo-admin
+
+  jira:uiModifications:
+    - key: primitives-ui-mods
+      title: Forge Primitives UI Modifications
+      resource: ui-mods
+
+  jira:workflowCondition:
+    - key: primitives-workflow-condition
+      name: Forge Primitives Condition
+      description: Always true (reference condition).
+      expression: "true"
+
+  jira:workflowValidator:
+    - key: primitives-workflow-validator
+      name: Forge Primitives Validator
+      description: Always valid (reference validator).
+      expression: "true"
+
+  jira:workflowPostFunction:
+    - key: primitives-workflow-post-function
+      name: Forge Primitives Post Function
+      description: Reference post function that logs to audit.
+      function: workflow-post-function
+
+  jira:jqlFunction:
+    - key: primitives-jql-function
+      name: primitivesExample
+      description: Returns a simple JQL clause for demo purposes.
+      arguments:
+        - name: query
+          required: false
+      operators:
+        - in
+      types:
+        - issue
+      function: jql-function
+
+resources:
+  - key: jql-editor
+    path: static/jql-editor/build
+  - key: ui-mods
+    path: static/ui-modifications
+  - key: main
+    path: src/frontend/index.jsx
+  - key: admin
+    path: src/frontend/admin.jsx
+  - key: module
+    path: src/frontend/module.jsx
+  - key: command-modal
+    path: src/frontend/commandModal.jsx
+  - key: dashboard-gadget-view
+    path: src/frontend/dashboardGadgetView.jsx
+  - key: dashboard-gadget-edit
+    path: src/frontend/dashboardGadgetEdit.jsx
+  - key: dashboard-background
+    path: src/frontend/dashboardBackground.jsx
+  - key: issue-background
+    path: src/frontend/issueBackground.jsx
+  - key: custom-field-view
+    path: src/frontend/customFieldView.jsx
+  - key: custom-field-edit
+    path: src/frontend/customFieldEdit.jsx
+
+permissions:
+  scopes:
+    - read:jira-work
+    - read:jira-user
+    - manage:jira-configuration
+    - storage:app
+  content:
+    styles:
+      - 'unsafe-inline'

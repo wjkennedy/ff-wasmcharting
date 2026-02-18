@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Forge Primitives Demo Summary</title>
+<style>
+  @page { size: Letter; margin: 0.55in; }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt; color: #111; }
+  h1 { font-size: 16pt; margin: 0 0 8px 0; }
+  h2 { font-size: 12pt; margin: 10px 0 4px 0; }
+  p { margin: 0 0 6px 0; }
+  ul { margin: 0 0 6px 16px; padding: 0; }
+  li { margin: 0 0 3px 0; }
+  .small { font-size: 9.5pt; color: #333; }
+  .section { margin-bottom: 6px; }
+  .mono { font-family: Menlo, Monaco, Consolas, monospace; font-size: 9.5pt; }
+  .divider { height: 1px; background: #ddd; margin: 8px 0; }
+</style>
+</head>
+<body>
+  <h1>Forge Primitives Demo (Jira, UI Kit latest) - One Page Summary</h1>
+
+  <div class="section">
+    <h2>What it is</h2>
+    <p>A Jira Forge app demo showcasing UI Kit latest primitives and common Jira integration patterns (JQL search, presets, admin utilities). It ships as a global page and an admin page with a Forge resolver backend.</p>
+  </div>
+
+  <div class="section">
+    <h2>Who it is for</h2>
+    <p>Primary user/persona: Not found in repo (inferred: Jira admins and Forge developers evaluating UI Kit and admin tooling).</p>
+  </div>
+
+  <div class="section">
+    <h2>What it does (key features)</h2>
+    <ul>
+      <li>JQL search UI with a results table (key, summary, status, assignee, updated).</li>
+      <li>Saved JQL presets per detected project (feature flag).</li>
+      <li>CSV export of search results (feature flag).</li>
+      <li>Catalog of Jira Forge extension points with links to docs.</li>
+      <li>Admin page for RBAC, feature flags, and secret management.</li>
+      <li>App audit trail viewer with refresh and clear actions.</li>
+      <li>Optional read-only Jira audit count fetch (requires admin scope).</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>How it works (architecture overview)</h2>
+    <ul>
+      <li>UI Kit frontends: <span class="mono">src/frontend/index.jsx</span> (global page) and <span class="mono">src/frontend/admin.jsx</span> (admin page) render UI and call backend via <span class="mono">@forge/bridge</span>.</li>
+      <li>Backend: <span class="mono">index.js</span> Forge resolver defines handlers for access control, presets, audit, secrets, and JQL search.</li>
+      <li>Data storage: Forge storage holds config, presets, and audit log; Forge secret store holds secrets.</li>
+      <li>External services: Jira REST API via <span class="mono">api.asUser().requestJira</span> for JQL search and audit records.</li>
+      <li>Manifest wiring: <span class="mono">jira:globalPage</span>, <span class="mono">jira:adminPage</span>, a resolver function, and resources for UI Kit and a bundled Custom UI JQL editor.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>How to run (minimal getting started)</h2>
+    <ul>
+      <li>Install Forge CLI: <span class="mono">npm install -g @forge/cli@latest</span></li>
+      <li>Register: <span class="mono">forge register</span></li>
+      <li>Deploy: <span class="mono">forge deploy</span></li>
+      <li>Install to site: <span class="mono">forge install --site=&lt;your-site&gt;.atlassian.net --product=jira</span></li>
+      <li>Open in Jira: Apps - Forge Primitives Demo</li>
+    </ul>
+    <p class="small">Optional: Custom UI JQL editor build steps are in README (Not required for minimal run).</p>
+  </div>
+</body>
+</html>

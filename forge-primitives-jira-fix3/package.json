@@ -1,0 +1,17 @@
+{
+  "name": "forge-primitives-jira",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo \"UI Kit renders natively; no build step required\"",
+    "deploy:prod": "forge deploy -e production && forge install -e production --site=$FORGE_SITE"
+  },
+  "dependencies": {
+    "@forge/api": "latest",
+    "@forge/bridge": "latest",
+    "@forge/react": "latest",
+    "@forge/resolver": "latest",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

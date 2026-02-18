@@ -1,0 +1,4 @@
+interface:
+  display_name: "Forge Architect Foundation"
+  short_description: "Atlassian Forge architecture and delivery doctrine"
+  default_prompt: "Use $atlassian-forge-development-architect-foundation to design and implement a production-grade Forge app with correct architecture, tests, and deployable packaging."
