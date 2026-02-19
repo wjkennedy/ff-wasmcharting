@@ -7,7 +7,7 @@ const COLORS = {
 
 const $ = (id) => document.getElementById(id);
 
-class FlowChartWebGL {
+class FlowPointCloudWebGL {
   constructor(canvas, tooltip) {
     this.canvas = canvas;
     this.tooltip = tooltip;
@@ -16,9 +16,9 @@ class FlowChartWebGL {
     this.program = this.buildProgram();
     this.positionBuffer = this.gl.createBuffer();
     this.colorBuffer = this.gl.createBuffer();
-    this.rects = [];
-    this.labels = [];
-    this.onBarClick = null;
+    this.points = [];
+    this.pointSize = 5;
+    this.onLaneClick = null;
     this.installEvents();
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -33,6 +33,7 @@ class FlowChartWebGL {
       varying vec3 vColor;
       void main() {
         vColor = aColor;
+        gl_PointSize = ${this.pointSize.toFixed(1)};
         gl_Position = vec4(aPosition, 0.0, 1.0);
       }
     `);
@@ -43,7 +44,9 @@ class FlowChartWebGL {
       precision mediump float;
       varying vec3 vColor;
       void main() {
-        gl_FragColor = vec4(vColor, 1.0);
+        float d = distance(gl_PointCoord, vec2(0.5, 0.5));
+        if (d > 0.5) discard;
+        gl_FragColor = vec4(vColor, 0.95);
       }
     `);
     gl.compileShader(fs);
@@ -57,90 +60,38 @@ class FlowChartWebGL {
 
   resize() {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const width = this.canvas.clientWidth;
-    const height = this.canvas.clientHeight;
-    this.canvas.width = Math.floor(width * dpr);
-    this.canvas.height = Math.floor(height * dpr);
+    this.canvas.width = Math.floor(this.canvas.clientWidth * dpr);
+    this.canvas.height = Math.floor(this.canvas.clientHeight * dpr);
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    if (this.lastData) this.render(this.lastData);
+    if (this.lastDataset) {
+      this.render(this.lastDataset);
+    }
   }
 
-  installEvents() {
-    this.canvas.addEventListener('mousemove', (event) => {
-      const rect = this.canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      const hit = this.rects.find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-      if (!hit) {
-        this.tooltip.style.display = 'none';
-        this.canvas.style.cursor = 'default';
-        return;
-      }
-      this.canvas.style.cursor = 'pointer';
-      this.tooltip.style.display = 'block';
-      this.tooltip.style.left = `${x}px`;
-      this.tooltip.style.top = `${y}px`;
-      this.tooltip.textContent = `${hit.label}: ${hit.value}`;
-    });
-
-    this.canvas.addEventListener('mouseleave', () => {
-      this.tooltip.style.display = 'none';
-      this.canvas.style.cursor = 'default';
-    });
-
-    this.canvas.addEventListener('click', (event) => {
-      if (!this.onBarClick) return;
-      const rect = this.canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      const hit = this.rects.find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-      if (hit) this.onBarClick(hit.bucketKey);
-    });
+  toNdc(xNorm, yNorm) {
+    return [xNorm * 2 - 1, 1 - yNorm * 2];
   }
 
-  render(data) {
-    this.lastData = data;
+  toScreen(xNorm, yNorm) {
+    return {
+      x: xNorm * this.canvas.clientWidth,
+      y: yNorm * this.canvas.clientHeight
+    };
+  }
+
+  render(dataset) {
+    this.lastDataset = dataset;
+    this.points = dataset?.points || [];
     const gl = this.gl;
-    const width = this.canvas.clientWidth;
-    const height = this.canvas.clientHeight;
-    const labels = [
-      ['backlog', data.buckets.backlog || 0],
-      ['inProgress', data.buckets.inProgress || 0],
-      ['done', data.buckets.done || 0],
-      ['other', data.buckets.other || 0]
-    ];
-    this.labels = labels;
-
-    const max = Math.max(1, ...labels.map(([, v]) => v));
-    const margin = { top: 18, right: 20, bottom: 26, left: 20 };
-    const chartW = width - margin.left - margin.right;
-    const chartH = height - margin.top - margin.bottom;
-    const gap = 18;
-    const barW = (chartW - gap * (labels.length - 1)) / labels.length;
-
     const vertices = [];
     const colors = [];
-    this.rects = [];
 
-    labels.forEach(([key, value], index) => {
-      const x = margin.left + index * (barW + gap);
-      const h = (value / max) * chartH;
-      const y = margin.top + (chartH - h);
-      this.rects.push({
-        x,
-        y,
-        w: barW,
-        h,
-        value,
-        label: key,
-        bucketKey: key
-      });
-      this.pushRect(vertices, x, y, barW, h, width, height);
-      const color = COLORS[key] || COLORS.other;
-      for (let i = 0; i < 6; i += 1) {
-        colors.push(color[0], color[1], color[2]);
-      }
-    });
+    for (const p of this.points) {
+      const [x, y] = this.toNdc(p.x, p.y);
+      vertices.push(x, y);
+      const c = COLORS[p.lane] || COLORS.other;
+      colors.push(c[0], c[1], c[2]);
+    }
 
     gl.clearColor(1, 1, 1, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -158,32 +109,55 @@ class FlowChartWebGL {
     gl.enableVertexAttribArray(colorLoc);
     gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
 
-    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / 2);
+    gl.drawArrays(gl.POINTS, 0, vertices.length / 2);
   }
 
-  pushRect(vertices, x, y, w, h, width, height) {
-    const toNdc = (px, py) => {
-      const ndcX = (px / width) * 2 - 1;
-      const ndcY = 1 - (py / height) * 2;
-      return [ndcX, ndcY];
-    };
-    const [x1, y1] = toNdc(x, y);
-    const [x2, y2] = toNdc(x + w, y + h);
-    vertices.push(
-      x1, y1,
-      x2, y1,
-      x1, y2,
-      x1, y2,
-      x2, y1,
-      x2, y2
-    );
+  findNearestPoint(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    let best = null;
+    let bestDist = Infinity;
+    for (const p of this.points) {
+      const s = this.toScreen(p.x, p.y);
+      const d = Math.hypot(x - s.x, y - s.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return bestDist <= 12 ? best : null;
   }
-}
 
-function getStatusClause(bucketKey, statusGroups) {
-  const list = statusGroups?.[bucketKey] || [];
-  if (!Array.isArray(list) || list.length === 0) return '';
-  return `status in (${list.map((s) => `"${String(s).replaceAll('"', '\\"')}"`).join(', ')})`;
+  installEvents() {
+    this.canvas.addEventListener('mousemove', (event) => {
+      const hit = this.findNearestPoint(event.clientX, event.clientY);
+      if (!hit) {
+        this.tooltip.style.display = 'none';
+        this.canvas.style.cursor = 'default';
+        return;
+      }
+      const rect = this.canvas.getBoundingClientRect();
+      this.tooltip.style.display = 'block';
+      this.tooltip.style.left = `${event.clientX - rect.left}px`;
+      this.tooltip.style.top = `${event.clientY - rect.top}px`;
+      this.tooltip.textContent = `${hit.issueKey} • ${hit.lane} • age ${hit.ageDays.toFixed(1)}d`;
+      this.canvas.style.cursor = 'pointer';
+    });
+
+    this.canvas.addEventListener('mouseleave', () => {
+      this.tooltip.style.display = 'none';
+      this.canvas.style.cursor = 'default';
+    });
+
+    this.canvas.addEventListener('click', (event) => {
+      if (!this.onLaneClick) return;
+      const hit = this.findNearestPoint(event.clientX, event.clientY);
+      if (hit) {
+        this.onLaneClick(hit.lane);
+      }
+    });
+  }
 }
 
 function renderIssueRows(issues) {
@@ -223,10 +197,8 @@ function downloadCsv(fileName, content) {
 function createBridgeClient() {
   if (window.__bridge && typeof window.__bridge.callBridge === 'function') {
     return {
-      invoke: async (functionKey, payload) =>
-        window.__bridge.callBridge('invoke', { functionKey, payload }),
-      getContext: async () => window.__bridge.callBridge('getContext'),
-      mode: 'forge'
+      invoke: async (functionKey, payload) => window.__bridge.callBridge('invoke', { functionKey, payload }),
+      getContext: async () => window.__bridge.callBridge('getContext')
     };
   }
   throw new Error('Forge bridge is unavailable in this context');
@@ -235,31 +207,37 @@ function createBridgeClient() {
 async function waitForBridge(timeoutMs = 4000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (window.__bridge && typeof window.__bridge.callBridge === 'function') {
-      return;
-    }
+    if (window.__bridge && typeof window.__bridge.callBridge === 'function') return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error('Forge bridge is unavailable in this context');
+}
+
+function laneClause(lane, statusGroups) {
+  const statuses = statusGroups?.[lane] || [];
+  if (!Array.isArray(statuses) || statuses.length === 0) return '';
+  return `status in (${statuses.map((s) => `"${String(s).replaceAll('"', '\\"')}"`).join(', ')})`;
 }
 
 async function main() {
   const status = $('statusText');
   const jqlInput = $('jqlInput');
   const errorBanner = $('errorBanner');
-  const chart = new FlowChartWebGL($('chart'), $('tooltip'));
-  let statusGroups = {};
-  let projectKey = '';
+  const chart = new FlowPointCloudWebGL($('chart'), $('tooltip'));
+
   let client;
+  let projectKey = '';
+  let statusGroups = {};
+
   try {
     await waitForBridge();
     client = createBridgeClient();
     const bootstrap = await client.invoke('getBootstrap');
-    statusGroups = bootstrap?.config?.statusGroups || {};
     projectKey = bootstrap?.viewer?.projectKey || '';
+    statusGroups = bootstrap?.config?.statusGroups || {};
     if (!projectKey) {
       const ctx = await client.getContext();
-      projectKey = ctx?.extension?.project?.key || ctx?.platformContext?.extension?.project?.key || '';
+      projectKey = ctx?.extension?.project?.key || '';
     }
   } catch (error) {
     errorBanner.hidden = false;
@@ -268,38 +246,33 @@ async function main() {
 
   async function loadFlow() {
     try {
-      status.textContent = 'Loading aggregate...';
+      status.textContent = 'Loading flow model...';
       const jql = jqlInput.value.trim();
       const result = await client.invoke('queryAggregate', {
         jql,
+        projectKey,
         viewType: 'flow',
-        maxIssues: 2000,
-        projectKey
+        maxIssues: 5000
       });
       chart.render(result.aggregate);
       renderIssueRows(result.sampleIssues || []);
       const loaded = result.meta?.sourceCount || 0;
       const total = result.meta?.totalAvailable || loaded;
-      const truncated = result.meta?.truncated ? ' (partial)' : '';
-      const boundNote = result.meta?.jqlApplied && result.meta?.jqlApplied !== result.meta?.jqlRequested
-        ? ' Auto-bounded unscoped JQL to last 90 days.'
-        : '';
-      const projectNote = projectKey ? ` Scope: ${projectKey}.` : ' Scope: global fallback.';
-      status.textContent = `Loaded ${loaded}/${total} issues${truncated}. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.${boundNote}${projectNote}`;
+      status.textContent = `Loaded ${loaded}/${total} issues. Applied JQL: ${result.meta?.jqlApplied || jql}`;
     } catch (error) {
       status.textContent = `Load failed: ${error.message || String(error)}`;
     }
   }
 
-  chart.onBarClick = async (bucketKey) => {
+  chart.onLaneClick = async (lane) => {
     try {
-      const baseJql = jqlInput.value.trim();
-      const statusClause = getStatusClause(bucketKey, statusGroups);
-      const jql = statusClause ? `(${baseJql}) AND (${statusClause})` : baseJql;
-      status.textContent = `Loading drill-down for ${bucketKey}...`;
-      const issues = await client.invoke('listIssues', { jql, maxIssues: 100, projectKey });
+      const base = jqlInput.value.trim();
+      const clause = laneClause(lane, statusGroups);
+      const jql = clause ? `(${base}) AND (${clause})` : base;
+      status.textContent = `Loading ${lane} lane...`;
+      const issues = await client.invoke('listIssues', { jql, projectKey, maxIssues: 200 });
       renderIssueRows(issues || []);
-      status.textContent = `Drill-down loaded for ${bucketKey}.`;
+      status.textContent = `Drill-down loaded for ${lane}.`;
     } catch (error) {
       status.textContent = `Drill-down failed: ${error.message || String(error)}`;
     }
@@ -308,8 +281,11 @@ async function main() {
   $('loadBtn').addEventListener('click', loadFlow);
   $('csvBtn').addEventListener('click', async () => {
     try {
-      const jql = jqlInput.value.trim();
-      const out = await client.invoke('exportIssuesCsv', { jql, maxIssues: 1000, projectKey });
+      const out = await client.invoke('exportIssuesCsv', {
+        jql: jqlInput.value.trim(),
+        projectKey,
+        maxIssues: 1000
+      });
       if (out?.fileName && out?.content) {
         downloadCsv(out.fileName, out.content);
       }
@@ -322,5 +298,5 @@ async function main() {
 }
 
 main().catch((error) => {
-  $('statusText').textContent = `Error: ${error.message}`;
+  $('statusText').textContent = `Error: ${error.message || String(error)}`;
 });

@@ -2,10 +2,10 @@ import ResolverImport from '@forge/resolver';
 import api, { route, storage } from '@forge/api';
 import {
   buildDistributionAggregate,
-  buildFlowAggregate,
-  hashKey,
-  pickStatusGroup
+  hashKey
 } from './lib/aggregates.js';
+import { fetchWorkItemsAsUser } from './lib/work-fetch.js';
+import { buildFlowCanvasDataset, buildFlowWorkItems } from './lib/flow-canvas-model.js';
 
 const Resolver = ResolverImport?.default || ResolverImport;
 const resolver = new Resolver();
@@ -37,55 +37,6 @@ function nowIso() {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value) || min));
-}
-
-function withSafetyBound(jql) {
-  const trimmed = (jql || '').trim();
-  if (!trimmed) {
-    return 'updated >= -90d ORDER BY updated DESC';
-  }
-  if (/^order\s+by\b/i.test(trimmed)) {
-    return `updated >= -90d ${trimmed}`;
-  }
-  if (/updated\s*[<>]=?\s*|created\s*[<>]=?\s*|resolved\s*[<>]=?\s*|resolutiondate\s*[<>]=?\s*/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `(${trimmed}) AND updated >= -90d`;
-}
-
-function hasProjectRestriction(jql) {
-  return /\bproject\s*(=|in)\b/i.test(jql || '');
-}
-
-function extractProjectKeyFromJql(jql) {
-  const text = jql || '';
-  const single = text.match(/\bproject\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i);
-  if (single?.[1]) {
-    return single[1].toUpperCase();
-  }
-  return '';
-}
-
-function withProjectBound(jql, projectKey) {
-  const trimmed = (jql || '').trim();
-  if (!projectKey || hasProjectRestriction(trimmed)) {
-    return trimmed;
-  }
-  if (!trimmed) {
-    return `project = "${projectKey}" ORDER BY updated DESC`;
-  }
-  return `(project = "${projectKey}") AND (${trimmed})`;
-}
-
-function enforceProjectContext(jql, projectKey) {
-  const trimmed = (jql || '').trim();
-  if (!projectKey) {
-    return trimmed;
-  }
-  if (!trimmed) {
-    return `project = "${projectKey}" ORDER BY updated DESC`;
-  }
-  return `(project = "${projectKey}") AND (${trimmed})`;
 }
 
 async function getConfig() {
@@ -140,91 +91,6 @@ async function writeCache(cacheKey, data, ttlSeconds) {
     expiresAt: Date.now() + (clamp(ttlSeconds, 60, 3600) * 1000),
     cachedAt: nowIso()
   });
-}
-
-function compactErrorBody(raw) {
-  return String(raw || '')
-    .replaceAll('\n', ' ')
-    .replace(/\s+/g, ' ')
-    .slice(0, 300);
-}
-
-async function executePaginatedSearch(jql, maxIssues) {
-  const fields = ['summary', 'status', 'priority', 'created', 'updated', 'issuetype'];
-  const pageSizeMax = 100;
-  let nextPageToken = '';
-  let total = null;
-  const issues = [];
-
-  while (issues.length < maxIssues) {
-    const pageSize = Math.min(pageSizeMax, maxIssues - issues.length);
-    const params = new URLSearchParams();
-    params.set('jql', jql);
-    params.set('maxResults', String(pageSize));
-    params.set('fields', fields.join(','));
-    if (nextPageToken) {
-      params.set('nextPageToken', nextPageToken);
-    }
-
-    const response = await api.asUser().requestJira(
-      route`/rest/api/3/search/jql?${params.toString()}`,
-      { method: 'GET' }
-    );
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`Jira search failed (${response.status}): ${compactErrorBody(errorBody)}`);
-    }
-
-    const payload = await response.json();
-    const batch = payload?.issues || [];
-    issues.push(...batch);
-    if (typeof payload?.total === 'number') {
-      total = payload.total;
-    }
-
-    nextPageToken = payload?.nextPageToken || '';
-    const isLast = payload?.isLast === true;
-    if (!nextPageToken || isLast || batch.length === 0) {
-      break;
-    }
-  }
-
-  return { issues, total };
-}
-
-async function fetchIssuesAsUser(jql, maxIssues, projectKey) {
-  const inferredProject = projectKey || extractProjectKeyFromJql(jql);
-  const contextScoped = enforceProjectContext(jql, inferredProject);
-  const projectBound = withProjectBound(contextScoped, inferredProject);
-  const scopedAndBounded = withSafetyBound(projectBound);
-  try {
-    const first = await executePaginatedSearch(scopedAndBounded, maxIssues);
-    return { ...first, appliedJql: scopedAndBounded };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/Unbounded JQL queries are not allowed/i.test(message)) {
-      const candidates = [
-        withSafetyBound(projectBound),
-        withProjectBound(withSafetyBound(contextScoped), inferredProject),
-        inferredProject ? `project = "${inferredProject}" AND updated >= -90d ORDER BY updated DESC` : '',
-        `project IS NOT EMPTY AND updated >= -90d ORDER BY updated DESC`
-      ].filter(Boolean);
-
-      for (const candidate of candidates) {
-        try {
-          const retry = await executePaginatedSearch(candidate, maxIssues);
-          return { ...retry, appliedJql: candidate };
-        } catch (retryError) {
-          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
-          if (!/Unbounded JQL queries are not allowed/i.test(retryMessage)) {
-            throw retryError;
-          }
-        }
-      }
-    }
-    throw error;
-  }
 }
 
 async function recordPerf(context, payload) {
@@ -284,12 +150,18 @@ resolver.define('queryAggregate', async ({ context, payload }) => {
     }
 
     const projectKey = payload?.projectKey || context?.extension?.project?.key || '';
-    const search = await fetchIssuesAsUser(jql, maxIssues, projectKey);
+    const search = await fetchWorkItemsAsUser({
+      api,
+      route,
+      jql,
+      maxIssues,
+      projectKey
+    });
     const issues = search.issues;
     const viewType = payload?.viewType === 'distribution' ? 'distribution' : 'flow';
     const aggregate = viewType === 'distribution'
       ? buildDistributionAggregate(issues, config.fieldMapping.team)
-      : buildFlowAggregate(issues, config.statusGroups);
+      : buildFlowCanvasDataset(buildFlowWorkItems(issues, config.statusGroups));
 
     const result = {
       aggregate,
@@ -331,7 +203,13 @@ resolver.define('listIssues', async ({ payload }) => {
   }
   const maxIssues = clamp(payload?.maxIssues || 200, 1, 1000);
   const projectKey = payload?.projectKey || '';
-  const search = await fetchIssuesAsUser(jql, maxIssues, projectKey);
+  const search = await fetchWorkItemsAsUser({
+    api,
+    route,
+    jql,
+    maxIssues,
+    projectKey
+  });
   const issues = search.issues;
   return issues.map((issue) => ({
     key: issue.key,
@@ -348,7 +226,13 @@ resolver.define('exportIssuesCsv', async ({ payload }) => {
     throw new Error('JQL is required');
   }
   const projectKey = payload?.projectKey || '';
-  const search = await fetchIssuesAsUser(jql, clamp(payload?.maxIssues || 500, 1, 1000), projectKey);
+  const search = await fetchWorkItemsAsUser({
+    api,
+    route,
+    jql,
+    maxIssues: clamp(payload?.maxIssues || 500, 1, 1000),
+    projectKey
+  });
   const issues = search.issues;
   const header = ['Key', 'Summary', 'Status', 'Priority', 'Updated'];
   const rows = issues.map((issue) => [
