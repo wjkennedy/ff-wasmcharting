@@ -57,9 +57,29 @@ function hasProjectRestriction(jql) {
   return /\bproject\s*(=|in)\b/i.test(jql || '');
 }
 
+function extractProjectKeyFromJql(jql) {
+  const text = jql || '';
+  const single = text.match(/\bproject\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i);
+  if (single?.[1]) {
+    return single[1].toUpperCase();
+  }
+  return '';
+}
+
 function withProjectBound(jql, projectKey) {
   const trimmed = (jql || '').trim();
   if (!projectKey || hasProjectRestriction(trimmed)) {
+    return trimmed;
+  }
+  if (!trimmed) {
+    return `project = "${projectKey}" ORDER BY updated DESC`;
+  }
+  return `(project = "${projectKey}") AND (${trimmed})`;
+}
+
+function enforceProjectContext(jql, projectKey) {
+  const trimmed = (jql || '').trim();
+  if (!projectKey) {
     return trimmed;
   }
   if (!trimmed) {
@@ -174,17 +194,21 @@ async function executePaginatedSearch(jql, maxIssues) {
 }
 
 async function fetchIssuesAsUser(jql, maxIssues, projectKey) {
-  const projectBound = withProjectBound(jql, projectKey);
+  const inferredProject = projectKey || extractProjectKeyFromJql(jql);
+  const contextScoped = enforceProjectContext(jql, inferredProject);
+  const projectBound = withProjectBound(contextScoped, inferredProject);
+  const scopedAndBounded = withSafetyBound(projectBound);
   try {
-    const first = await executePaginatedSearch(projectBound, maxIssues);
-    return { ...first, appliedJql: projectBound };
+    const first = await executePaginatedSearch(scopedAndBounded, maxIssues);
+    return { ...first, appliedJql: scopedAndBounded };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/Unbounded JQL queries are not allowed/i.test(message)) {
       const candidates = [
         withSafetyBound(projectBound),
-        withProjectBound(withSafetyBound(jql), projectKey),
-        projectKey ? `project = "${projectKey}" AND updated >= -90d ORDER BY updated DESC` : ''
+        withProjectBound(withSafetyBound(contextScoped), inferredProject),
+        inferredProject ? `project = "${inferredProject}" AND updated >= -90d ORDER BY updated DESC` : '',
+        `project IS NOT EMPTY AND updated >= -90d ORDER BY updated DESC`
       ].filter(Boolean);
 
       for (const candidate of candidates) {

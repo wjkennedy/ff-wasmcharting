@@ -225,6 +225,7 @@ function createBridgeClient() {
     return {
       invoke: async (functionKey, payload) =>
         window.__bridge.callBridge('invoke', { functionKey, payload }),
+      getContext: async () => window.__bridge.callBridge('getContext'),
       mode: 'forge'
     };
   }
@@ -256,6 +257,10 @@ async function main() {
     const bootstrap = await client.invoke('getBootstrap');
     statusGroups = bootstrap?.config?.statusGroups || {};
     projectKey = bootstrap?.viewer?.projectKey || '';
+    if (!projectKey) {
+      const ctx = await client.getContext();
+      projectKey = ctx?.extension?.project?.key || ctx?.platformContext?.extension?.project?.key || '';
+    }
   } catch (error) {
     errorBanner.hidden = false;
     throw error;
@@ -279,7 +284,8 @@ async function main() {
       const boundNote = result.meta?.jqlApplied && result.meta?.jqlApplied !== result.meta?.jqlRequested
         ? ' Auto-bounded unscoped JQL to last 90 days.'
         : '';
-      status.textContent = `Loaded ${loaded}/${total} issues${truncated}. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.${boundNote}`;
+      const projectNote = projectKey ? ` Scope: ${projectKey}.` : ' Scope: global fallback.';
+      status.textContent = `Loaded ${loaded}/${total} issues${truncated}. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.${boundNote}${projectNote}`;
     } catch (error) {
       status.textContent = `Load failed: ${error.message || String(error)}`;
     }

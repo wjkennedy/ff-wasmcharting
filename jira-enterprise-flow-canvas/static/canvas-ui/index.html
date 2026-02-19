@@ -10,8 +10,9 @@
     <div class="shell">
       <div class="panel">
         <h2>Flow View (WebGL)</h2>
+        <div class="status">Project scope is inherited from this page context.</div>
         <div class="toolbar">
-          <input id="jqlInput" value="updated >= -90d ORDER BY updated DESC" />
+          <input id="jqlInput" value="assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC" />
           <button id="loadBtn" type="button">Load</button>
           <button id="csvBtn" type="button">Export CSV</button>
         </div>
