@@ -43,9 +43,9 @@ This application is a Forge-hosted MVP scaffold for enterprise Jira flow analyti
   - Hover hit-testing and tooltip
   - Click-to-drill-down wiring
   - CSV export wiring
-- Current mode:
-  - Mock bridge mode by default for local static execution
-  - Ready to switch to real Forge bridge invoke once frontend bundling is added
+- Runtime mode:
+  - Uses Forge bridge directly via `window.__bridge.callBridge('invoke', ...)`
+  - No mock data fallback path
 
 ## Codex generation pipeline (traceability)
 
@@ -90,7 +90,7 @@ This scaffold was generated iteratively by Codex using the following pipeline:
 6. WebGL slice implementation
    - Replaced static placeholder UI with active chart shell.
    - Implemented shader program, vertex/color buffers, bar rendering, tooltip hit-testing, and click drilldown flow.
-   - Added mock bridge client fallback to keep chart runnable before bundler integration.
+   - Wired runtime calls through Forge bridge (`window.__bridge.callBridge`) to resolvers.
 
 7. Verification
    - Executed `npm test` successfully (`3` tests passing).
@@ -114,6 +114,5 @@ FORGE_SITE=<your-site>.atlassian.net ./deploy-production.sh
 
 ## Next implementation slices
 
-- Add frontend bundling for `@forge/bridge` in Custom UI and replace mock invoke path.
 - Add Distribution view (scatter/density) in WebGL.
 - Add “How computed” and performance/freshness panel in project page UI.

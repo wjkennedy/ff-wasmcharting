@@ -92,16 +92,11 @@ async function writeCache(cacheKey, data, ttlSeconds) {
 }
 
 async function fetchIssuesAsUser(jql, maxIssues) {
-  const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jql,
-      maxResults: maxIssues,
-      startAt: 0,
-      fields: ['summary', 'status', 'priority', 'created', 'updated', 'issuetype']
-    })
-  });
+  const fields = ['summary', 'status', 'priority', 'created', 'updated', 'issuetype'];
+  const response = await api.asUser().requestJira(
+    route`/rest/api/3/search?jql=${jql}&maxResults=${maxIssues}&startAt=0&fields=${fields.join(',')}`,
+    { method: 'GET' }
+  );
 
   if (!response.ok) {
     const errorBody = await response.text();
@@ -142,59 +137,64 @@ resolver.define('getBootstrap', async ({ context }) => {
 
 resolver.define('queryAggregate', async ({ context, payload }) => {
   const startedAt = Date.now();
-  const config = await getConfig();
-  const jql = (payload?.jql || '').trim();
-  if (!jql) {
-    throw new Error('JQL is required');
-  }
+  try {
+    const config = await getConfig();
+    const jql = (payload?.jql || '').trim();
+    if (!jql) {
+      throw new Error('JQL is required');
+    }
 
-  const maxIssues = clamp(payload?.maxIssues || config.maxIssuesPerQuery, 100, 5000);
-  const cacheKey = buildCacheKey(context?.accountId || '', payload, config);
-  const cached = await readCache(cacheKey);
-  if (cached) {
-    await recordPerf(context, {
-      op: 'queryAggregate',
-      cacheHit: true,
-      elapsedMs: Date.now() - startedAt
-    });
-    return {
-      ...cached,
+    const maxIssues = clamp(payload?.maxIssues || config.maxIssuesPerQuery, 100, 5000);
+    const cacheKey = buildCacheKey(context?.accountId || '', payload, config);
+    const cached = await readCache(cacheKey);
+    if (cached) {
+      await recordPerf(context, {
+        op: 'queryAggregate',
+        cacheHit: true,
+        elapsedMs: Date.now() - startedAt
+      });
+      return {
+        ...cached,
+        meta: {
+          ...cached.meta,
+          cacheHit: true
+        }
+      };
+    }
+
+    const issues = await fetchIssuesAsUser(jql, maxIssues);
+    const viewType = payload?.viewType === 'distribution' ? 'distribution' : 'flow';
+    const aggregate = viewType === 'distribution'
+      ? buildDistributionAggregate(issues, config.fieldMapping.team)
+      : buildFlowAggregate(issues, config.statusGroups);
+
+    const result = {
+      aggregate,
+      sampleIssues: issues.slice(0, 200).map((issue) => ({
+        key: issue.key,
+        summary: issue?.fields?.summary || '',
+        status: issue?.fields?.status?.name || '',
+        priority: issue?.fields?.priority?.name || ''
+      })),
       meta: {
-        ...cached.meta,
-        cacheHit: true
+        sourceCount: issues.length,
+        generatedAt: nowIso(),
+        cacheHit: false
       }
     };
+
+    await writeCache(cacheKey, result, config.cacheTtlSeconds);
+    await recordPerf(context, {
+      op: 'queryAggregate',
+      cacheHit: false,
+      elapsedMs: Date.now() - startedAt,
+      issueCount: issues.length
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`queryAggregate failed: ${message}`);
   }
-
-  const issues = await fetchIssuesAsUser(jql, maxIssues);
-  const viewType = payload?.viewType === 'distribution' ? 'distribution' : 'flow';
-  const aggregate = viewType === 'distribution'
-    ? buildDistributionAggregate(issues, config.fieldMapping.team)
-    : buildFlowAggregate(issues, config.statusGroups);
-
-  const result = {
-    aggregate,
-    sampleIssues: issues.slice(0, 200).map((issue) => ({
-      key: issue.key,
-      summary: issue?.fields?.summary || '',
-      status: issue?.fields?.status?.name || '',
-      priority: issue?.fields?.priority?.name || ''
-    })),
-    meta: {
-      sourceCount: issues.length,
-      generatedAt: nowIso(),
-      cacheHit: false
-    }
-  };
-
-  await writeCache(cacheKey, result, config.cacheTtlSeconds);
-  await recordPerf(context, {
-    op: 'queryAggregate',
-    cacheHit: false,
-    elapsedMs: Date.now() - startedAt,
-    issueCount: issues.length
-  });
-  return result;
 });
 
 resolver.define('listIssues', async ({ payload }) => {

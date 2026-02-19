@@ -180,26 +180,6 @@ class FlowChartWebGL {
   }
 }
 
-function getMockResult() {
-  return {
-    aggregate: {
-      type: 'flow',
-      buckets: {
-        backlog: 54,
-        inProgress: 22,
-        done: 108,
-        other: 9
-      }
-    },
-    sampleIssues: [
-      { key: 'ENG-101', summary: 'Fix release blocker', status: 'In Progress', priority: 'Highest' },
-      { key: 'ENG-102', summary: 'Review dependency update', status: 'To Do', priority: 'High' },
-      { key: 'ENG-103', summary: 'Close stale incident', status: 'Done', priority: 'Medium' }
-    ],
-    meta: { cacheHit: false, sourceCount: 193, generatedAt: new Date().toISOString() }
-  };
-}
-
 function getStatusClause(bucketKey, statusGroups) {
   const list = statusGroups?.[bucketKey] || [];
   if (!Array.isArray(list) || list.length === 0) return '';
@@ -241,75 +221,85 @@ function downloadCsv(fileName, content) {
 }
 
 function createBridgeClient() {
-  if (typeof window.__FORGE_INVOKE__ === 'function') {
-    return { invoke: window.__FORGE_INVOKE__, mode: 'forge' };
+  if (window.__bridge && typeof window.__bridge.callBridge === 'function') {
+    return {
+      invoke: async (functionKey, payload) =>
+        window.__bridge.callBridge('invoke', { functionKey, payload }),
+      mode: 'forge'
+    };
   }
-  return {
-    invoke: async (name) => {
-      if (name === 'getBootstrap') {
-        return {
-          config: {
-            statusGroups: {
-              backlog: ['To Do'],
-              inProgress: ['In Progress'],
-              done: ['Done']
-            }
-          }
-        };
-      }
-      if (name === 'queryAggregate') return getMockResult();
-      if (name === 'listIssues') return getMockResult().sampleIssues;
-      if (name === 'exportIssuesCsv') {
-        return { fileName: 'flow-canvas-export.csv', content: 'Key,Summary\nENG-101,Mock issue\n' };
-      }
-      return null;
-    },
-    mode: 'mock'
-  };
+  throw new Error('Forge bridge is unavailable in this context');
+}
+
+async function waitForBridge(timeoutMs = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.__bridge && typeof window.__bridge.callBridge === 'function') {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('Forge bridge is unavailable in this context');
 }
 
 async function main() {
   const status = $('statusText');
   const jqlInput = $('jqlInput');
-  const bridgeBanner = $('bridgeBanner');
+  const errorBanner = $('errorBanner');
   const chart = new FlowChartWebGL($('chart'), $('tooltip'));
-  const client = createBridgeClient();
-  if (client.mode === 'mock') {
-    bridgeBanner.hidden = false;
+  let statusGroups = {};
+  let client;
+  try {
+    await waitForBridge();
+    client = createBridgeClient();
+    const bootstrap = await client.invoke('getBootstrap');
+    statusGroups = bootstrap?.config?.statusGroups || {};
+  } catch (error) {
+    errorBanner.hidden = false;
+    throw error;
   }
 
-  const bootstrap = await client.invoke('getBootstrap');
-  const statusGroups = bootstrap?.config?.statusGroups || {};
-
   async function loadFlow() {
-    status.textContent = 'Loading aggregate...';
-    const jql = jqlInput.value.trim();
-    const result = await client.invoke('queryAggregate', {
-      jql,
-      viewType: 'flow',
-      maxIssues: 2000
-    });
-    chart.render(result.aggregate);
-    renderIssueRows(result.sampleIssues || []);
-    status.textContent = `Loaded ${result.meta?.sourceCount || 0} issues. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.`;
+    try {
+      status.textContent = 'Loading aggregate...';
+      const jql = jqlInput.value.trim();
+      const result = await client.invoke('queryAggregate', {
+        jql,
+        viewType: 'flow',
+        maxIssues: 2000
+      });
+      chart.render(result.aggregate);
+      renderIssueRows(result.sampleIssues || []);
+      status.textContent = `Loaded ${result.meta?.sourceCount || 0} issues. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.`;
+    } catch (error) {
+      status.textContent = `Load failed: ${error.message || String(error)}`;
+    }
   }
 
   chart.onBarClick = async (bucketKey) => {
-    const baseJql = jqlInput.value.trim();
-    const statusClause = getStatusClause(bucketKey, statusGroups);
-    const jql = statusClause ? `(${baseJql}) AND (${statusClause})` : baseJql;
-    status.textContent = `Loading drill-down for ${bucketKey}...`;
-    const issues = await client.invoke('listIssues', { jql, maxIssues: 100 });
-    renderIssueRows(issues || []);
-    status.textContent = `Drill-down loaded for ${bucketKey}.`;
+    try {
+      const baseJql = jqlInput.value.trim();
+      const statusClause = getStatusClause(bucketKey, statusGroups);
+      const jql = statusClause ? `(${baseJql}) AND (${statusClause})` : baseJql;
+      status.textContent = `Loading drill-down for ${bucketKey}...`;
+      const issues = await client.invoke('listIssues', { jql, maxIssues: 100 });
+      renderIssueRows(issues || []);
+      status.textContent = `Drill-down loaded for ${bucketKey}.`;
+    } catch (error) {
+      status.textContent = `Drill-down failed: ${error.message || String(error)}`;
+    }
   };
 
   $('loadBtn').addEventListener('click', loadFlow);
   $('csvBtn').addEventListener('click', async () => {
-    const jql = jqlInput.value.trim();
-    const out = await client.invoke('exportIssuesCsv', { jql, maxIssues: 1000 });
-    if (out?.fileName && out?.content) {
-      downloadCsv(out.fileName, out.content);
+    try {
+      const jql = jqlInput.value.trim();
+      const out = await client.invoke('exportIssuesCsv', { jql, maxIssues: 1000 });
+      if (out?.fileName && out?.content) {
+        downloadCsv(out.fileName, out.content);
+      }
+    } catch (error) {
+      status.textContent = `CSV export failed: ${error.message || String(error)}`;
     }
   });
 
