@@ -248,12 +248,14 @@ async function main() {
   const errorBanner = $('errorBanner');
   const chart = new FlowChartWebGL($('chart'), $('tooltip'));
   let statusGroups = {};
+  let projectKey = '';
   let client;
   try {
     await waitForBridge();
     client = createBridgeClient();
     const bootstrap = await client.invoke('getBootstrap');
     statusGroups = bootstrap?.config?.statusGroups || {};
+    projectKey = bootstrap?.viewer?.projectKey || '';
   } catch (error) {
     errorBanner.hidden = false;
     throw error;
@@ -266,11 +268,18 @@ async function main() {
       const result = await client.invoke('queryAggregate', {
         jql,
         viewType: 'flow',
-        maxIssues: 2000
+        maxIssues: 2000,
+        projectKey
       });
       chart.render(result.aggregate);
       renderIssueRows(result.sampleIssues || []);
-      status.textContent = `Loaded ${result.meta?.sourceCount || 0} issues. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.`;
+      const loaded = result.meta?.sourceCount || 0;
+      const total = result.meta?.totalAvailable || loaded;
+      const truncated = result.meta?.truncated ? ' (partial)' : '';
+      const boundNote = result.meta?.jqlApplied && result.meta?.jqlApplied !== result.meta?.jqlRequested
+        ? ' Auto-bounded unscoped JQL to last 90 days.'
+        : '';
+      status.textContent = `Loaded ${loaded}/${total} issues${truncated}. Cache hit: ${result.meta?.cacheHit ? 'yes' : 'no'}.${boundNote}`;
     } catch (error) {
       status.textContent = `Load failed: ${error.message || String(error)}`;
     }
@@ -282,7 +291,7 @@ async function main() {
       const statusClause = getStatusClause(bucketKey, statusGroups);
       const jql = statusClause ? `(${baseJql}) AND (${statusClause})` : baseJql;
       status.textContent = `Loading drill-down for ${bucketKey}...`;
-      const issues = await client.invoke('listIssues', { jql, maxIssues: 100 });
+      const issues = await client.invoke('listIssues', { jql, maxIssues: 100, projectKey });
       renderIssueRows(issues || []);
       status.textContent = `Drill-down loaded for ${bucketKey}.`;
     } catch (error) {
@@ -294,7 +303,7 @@ async function main() {
   $('csvBtn').addEventListener('click', async () => {
     try {
       const jql = jqlInput.value.trim();
-      const out = await client.invoke('exportIssuesCsv', { jql, maxIssues: 1000 });
+      const out = await client.invoke('exportIssuesCsv', { jql, maxIssues: 1000, projectKey });
       if (out?.fileName && out?.content) {
         downloadCsv(out.fileName, out.content);
       }
