@@ -141,7 +141,8 @@ class FlowPointCloudWebGL {
       this.tooltip.style.display = 'block';
       this.tooltip.style.left = `${event.clientX - rect.left}px`;
       this.tooltip.style.top = `${event.clientY - rect.top}px`;
-      this.tooltip.textContent = `${hit.issueKey} • ${hit.lane} • age ${hit.ageDays.toFixed(1)}d`;
+      const ageDays = Number.isFinite(hit?.ageDays) ? hit.ageDays : 0;
+      this.tooltip.textContent = `${hit.issueKey || 'issue'} • ${hit.lane || 'lane'} • age ${ageDays.toFixed(1)}d`;
       this.canvas.style.cursor = 'pointer';
     });
 

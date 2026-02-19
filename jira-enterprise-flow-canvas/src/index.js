@@ -14,6 +14,7 @@ const CONFIG_KEY = 'efc:config';
 const SAVED_VIEW_PREFIX = 'efc:view:';
 const PERF_PREFIX = 'efc:perf:';
 const CACHE_PREFIX = 'efc:cache:';
+const AGGREGATE_MODEL_VERSION = 'flow-point-cloud-v1';
 
 const DEFAULT_CONFIG = {
   adminAccountIds: [],
@@ -66,6 +67,7 @@ function requireAdmin(context, config) {
 
 function buildCacheKey(accountId, payload, config) {
   const raw = JSON.stringify({
+    aggregateModelVersion: AGGREGATE_MODEL_VERSION,
     accountId,
     jql: payload?.jql || '',
     projectKey: payload?.projectKey || '',
